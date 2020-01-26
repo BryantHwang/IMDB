@@ -1,0 +1,581 @@
+---
+title: "IMDB Sentiment Analysis"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+```{r, load_libraries}
+
+#install.packages("data.table", repos = "https://cran.rstudio.com")
+library(data.table)
+library(stringr)
+#install.packages("readtext")
+library(readtext)
+library(plyr)
+library(dplyr)
+library(ggplot2)
+#install.packages("tm")
+library(tm)
+#install.packages("udpipe")
+library(udpipe)
+library(lattice)
+library(igraph)
+library(ggraph)
+install.packages("syuzhet")
+library(syuzhet)
+install.packages("plotly")
+library(plotly)
+install.packages("tm")
+library(tm)
+install.packages("wordcloud")
+library(wordcloud)
+
+```
+
+```{r, load_files}
+#load the two training datasets, pos and neg, into R
+pos_train_data<- readtext::readtext("~/Downloads/aclImdb/train/pos/*.txt")
+neg_train_data<- readtext::readtext("~/Downloads/aclImdb/train/neg/*.txt")
+```
+
+```{r, data_frame}
+# From training dataset take "text" variable, add to new dataframe, and add a column, "label", for the pos & ## neg datasets, then combine two datasets into one
+
+# Positive training set
+posDF <- data.frame(pos_train_data$text)
+posDF$label <-('pos') 
+names(posDF)<- c("text", "label")
+
+# Negative training set
+negDF <- data.frame(neg_train_data$text)
+negDF$label <-('neg') 
+names(negDF)<- c("text", "label")
+
+# Combine into one dataset
+trainDF <- rbind(posDF, negDF)
+
+```
+
+
+```{r, exploration}
+# Structure of Data
+str(trainDF)
+# First five lines of the file
+head(trainDF)
+# Unique values found in the label column
+unique(trainDF$label)
+# Count the number of unique values in the dataset based on the label column
+count(trainDF$label)
+# Plot the frequency within "label"
+ggplot(trainDF, aes(label)) +
+  geom_bar(fill = "#0073C2FF") 
+```
+```{r, removeHTML}
+cleanFun <- function(htmlString) {
+  return(gsub("<.*?>", "", htmlString))
+}
+
+clean1 <- as.data.frame(cleanFun(pos_train_data$text[10]))
+print(clean1)
+```
+
+
+```{r, clean_string_function}
+
+#######################################
+#                                     #
+#            DO NOT USE               #
+#                                     #
+######################################$
+Clean_String <- function(string){
+    # Lowercase
+    temp <- tolower(string)
+    # Remove everything that is not a number or letter (may want to keep more 
+    # stuff in your actual analyses). 
+    temp <- stringr::str_replace_all(temp,"[^a-zA-Z\\s]", " ")
+    # Shrink down to just one white space
+    temp <- stringr::str_replace_all(temp,"[\\s]+", " ")
+    # Split it
+    temp <- stringr::str_split(temp, " ")[[1]]
+    # Get rid of trailing "" if necessary
+    indexes <- which(temp == "")
+    if(length(indexes) > 0){
+      temp <- temp[-indexes]
+    } 
+    return(temp)
+}
+
+clean2 <- Clean_String(clean1)
+
+print(clean2)
+
+```
+
+
+
+
+```{r, clean_text_function}
+# function to clean text
+Clean_Text_Block <- function(text){
+    # Get rid of blank lines
+    indexes <- which(text == "")
+    if (length(indexes) > 0) {
+        text <- text[-indexes]
+    }
+	# See if we are left with any valid text:
+    if (length(text) == 0) {
+        cat("There was no text in this document! \n")
+        to_return <- list(num_tokens = 0, 
+		                     unique_tokens = 0, 
+							 text = "")
+    } else {
+        # If there is valid text, process it.
+        # Loop through the lines in the text and combine them:
+        clean_text <- NULL
+        for (i in 1:length(text)) {
+            # add them to a vector 
+            clean_text <- c(clean_text, cleanFun(text[i]))
+        }
+        # Calculate the number of tokens and unique tokens and return them in a 
+        # named list object.
+        num_tok <- length(clean_text)
+        num_uniq <- length(unique(clean_text))
+        to_return <- list(num_tokens = num_tok, 
+		                     unique_tokens = num_uniq, 
+							 text = clean_text)
+    }
+	
+    return(to_return)
+}
+```
+
+```{r, clean_dataset}
+# return list of elements - number of tokens, number of unique tokens, word count = number of tokens
+clean_text <- Clean_Text_Block(pos_train_data$text)
+
+```
+
+
+```{r, Add_Word_Count_function}
+Add_Word_Count <- function(text){
+  trainDF$wordCount <- c()
+  for (i in 1:length(text)) {
+    
+            # add them to a vector 
+            trainDF$wordCount[i] <- sapply(strsplit(pos_train_data$text[i], " "), length)
+  }
+  return(trainDF$wordCount)
+}
+```
+
+```{r, Word_count_call}
+trainDF$wordCount <-Add_Word_Count(as.character(pos_train_data$text))
+
+```
+
+```{r, Character_count_function}
+# Create a count of all characters in each review
+Add_Character_Count <- function(text){
+  trainDF$length <- c()
+    for (i in 1:length(text)) {
+    
+            # add them to a vector 
+            trainDF$length[i] <- nchar(pos_train_data$text[i])
+    }
+  return(trainDF$length)
+}
+
+
+
+```
+
+```{r, Length_call }
+
+trainDF$length <- Add_Character_Count(pos_train_data$text)
+
+```
+
+```{r, Density_function}
+# Calculate the average length of each word
+Add_Density <- function(length, wordCount){
+  trainDF$density <- c()
+    for (i in 1:length(length)) {
+    
+            # add them to a vector 
+            trainDF$density[i] <- trainDF$length[i]/trainDF$wordCount[i]
+    }
+  return(trainDF$density)
+}
+
+
+
+```
+
+```{r, Density_call}
+# populate the dataset with the average length of each word
+trainDF$density <- Add_Density(trainDF$length, trainDF$wordCount)
+
+```
+
+```{r, Stop_Words}
+
+Stop_Word_Count <- function(text){
+  trainDF$stopWords <- c()
+    for (i in 1:length(text)) {
+    
+            # add them to a vector 
+            trainDF$stopWords[i] <- sum(stringr::str_detect(tolower(pos_train_data$text[i]), stopwords(kind = "en")))
+    }
+  return(trainDF$stopWords)
+}
+
+
+```
+
+
+```{r, Stop_Word_function_call}
+
+trainDF$stopWords <- Stop_Word_Count(pos_train_data$text)
+
+```
+
+```{r, pos_Function}
+
+##################################################################
+#                                                                #
+# Don't run this code. It takes forever. Use the dataset I sent. #
+#                                                                #
+##################################################################
+
+
+# download the language model
+ud_model <- udpipe_download_model(language = "english")
+# load the model
+ud_model <- udpipe_load_model(ud_model$file_model)
+# annotate your file (file must be in UNLLC mode)
+x<- udpipe_annotate(ud_model, x = pos_train_data$text, doc_id = pos_train_data$doc_id)
+# Cast into a data frame
+x <- as.data.frame(x)
+# Write CSV in R
+write.csv(x, file = "pos.csv")
+
+```
+
+```{r, load_udpipe_data}
+
+udmodel <- read.csv("pos.csv")
+
+
+```
+
+```{r, udmodel_pos_count}
+options(scipen = 999)
+stats <- txt_freq(udmodel$upos)
+stats$key <- factor(stats$key, levels = rev(stats$key))
+barchart(key ~ freq, data = stats, col = "cadetblue", 
+         main = "UPOS (Universal Parts of Speech)\n frequency of occurrence", 
+         xlab = "Freq")
+
+
+```
+```{r,nouns}
+## NOUNS
+stats <- subset(udmodel, upos %in% c("NOUN")) 
+stats <- txt_freq(stats$token)
+stats$key <- factor(stats$key, levels = rev(stats$key))
+barchart(key ~ freq, data = head(stats, 20), col = "cadetblue", 
+         main = "Most occurring nouns", xlab = "Freq")
+
+```
+```{r, adjectives}
+
+## ADJECTIVES
+stats <- subset(udmodel, upos %in% c("ADJ")) 
+stats <- txt_freq(stats$token)
+stats$key <- factor(stats$key, levels = rev(stats$key))
+barchart(key ~ freq, data = head(stats, 20), col = "cadetblue", 
+         main = "Most occurring adjectives", xlab = "Freq")
+
+```
+
+```{r, Rapid_Automatic_Keyword_Extraction}
+
+## Using RAKE
+stats <- keywords_rake(x = udmodel, term = "lemma", group = "doc_id", 
+                       relevant = udmodel$upos %in% c("NOUN", "ADJ"))
+stats$key <- factor(stats$keyword, levels = rev(stats$keyword))
+barchart(key ~ rake, data = head(subset(stats, freq > 3), 20), col = "cadetblue", 
+         main = "Keywords identified by RAKE", 
+         xlab = "Rake")
+
+```
+
+```{r, Pointwise_Mutual_Information_Collocations }
+
+## Using Pointwise Mutual Information Collocations
+udmodel$word <- tolower(udmodel$token)
+stats <- keywords_collocation(x = udmodel, term = "word", group = "doc_id")
+stats$key <- factor(stats$keyword, levels = rev(stats$keyword))
+barchart(key ~ pmi, data = head(subset(stats, freq > 3), 20), col = "cadetblue", 
+         main = "Keywords identified by PMI Collocation", 
+         xlab = "PMI (Pointwise Mutual Information)")
+
+```
+
+```{r, noun_phrases}
+
+## Using a sequence of POS tags (noun phrases / verb phrases)
+udmodel$phrase_tag <- as_phrasemachine(as.character(udmodel$upos), type = "upos")
+stats <- keywords_phrases(x = udmodel$phrase_tag, term = tolower(udmodel$token), 
+                          pattern = "(A|N)*N(P+D*(A|N)*N)*", 
+                          is_regex = TRUE, detailed = FALSE)
+stats <- subset(stats, ngram > 1 & freq > 3)
+stats$key <- factor(stats$keyword, levels = rev(stats$keyword))
+barchart(key ~ freq, data = head(stats, 20), col = "cadetblue", 
+         main = "Keywords - simple noun phrases", xlab = "Frequency")
+
+```
+```{r, cooccurrence}
+
+cooc <- cooccurrence(x = subset(udmodel, upos %in% c("NOUN", "ADJ")), 
+                     term = "lemma", 
+                     group = c("doc_id", "paragraph_id", "sentence_id"))
+
+```
+
+```{r, wordNetwork }
+
+wordnetwork <- head(cooc, 30)
+wordnetwork <- graph_from_data_frame(wordnetwork)
+ggraph(wordnetwork, layout = "fr") +
+  geom_edge_link(aes(width = cooc, edge_alpha = cooc), edge_colour = "pink") +
+  geom_node_text(aes(label = name), col = "darkgreen", size = 4) +
+  theme_graph(base_family = "Arial Narrow") +
+  theme(legend.position = "none") +
+  labs(title = "Cooccurrences within sentence", subtitle = "Nouns & Adjective")
+
+```
+
+```{r, cooccurrence_upos }
+
+cooc1 <- cooccurrence(as.character(udmodel$lemma), relevant = udmodel$upos %in% c("NOUN", "ADJ"), skipgram = 1)
+
+
+```
+
+```{r, }
+
+wordnetwork1 <- head(cooc1, 15)
+wordnetwork1 <- graph_from_data_frame(wordnetwork1)
+ggraph(wordnetwork1, layout = "fr") +
+  geom_edge_link(aes(width = cooc, edge_alpha = cooc)) +
+  geom_node_text(aes(label = name), col = "darkgreen", size = 4) +
+  theme_graph(base_family = "Arial Narrow") +
+  labs(title = "Words following one another", subtitle = "Nouns & Adjective")
+
+```
+
+```{r, correlations}
+
+udmodel$id <- unique_identifier(udmodel, fields = c("sentence_id", "doc_id"))
+dtm <- subset(udmodel, upos %in% c("NOUN", "ADJ"))
+dtm <- document_term_frequencies(dtm, document = "id", term = "lemma")
+dtm <- document_term_matrix(dtm)
+dtm <- dtm_remove_lowfreq(dtm, minfreq = 5)
+termcorrelations <- dtm_cor(dtm)
+y <- as_cooccurrence(termcorrelations)
+y <- subset(y, term1 < term2 & abs(cooc) > 0.2)
+y <- y[order(abs(y$cooc), decreasing = TRUE), ]
+head(y)
+
+
+``` 
+
+```{r, kmeans}
+
+# A small kmeans algorithm attempt
+
+# Select number of clusters
+k <- 10
+
+trainDF2 <- trainDF %>% select(3:6)
+
+# Build model with k clusters: km.out
+km.trainDF <- kmeans(trainDF2, centers = k, nstart = 20, iter.max = 50)
+
+# View the resulting model
+km.trainDF
+```
+
+```{r}
+
+# Plot of Defense vs. Speed by cluster membership
+plot(trainDF[, c("stopWords", "length")],
+     col = km.trainDF$cluster,
+     main = paste("k-means clustering of Training Data with", k, "clusters"),
+     xlab = "Stop Word Count", ylab = "Length")
+
+```
+
+```{r, changing pos_train_data for scores}
+pos_train_data <- cbind(pos_train_data, replicate(1,pos_train_data$doc_id)) 
+names(pos_train_data)[3]<-"score"
+pos_train_data$score <- gsub(".*_", "",pos_train_data$score)
+pos_train_data$score <- gsub("\\..*", "", pos_train_data$score)
+```
+
+```{r, sentiment analysis done on text}
+udmodel<-cbind(udmodel, replicate(1,udmodel$doc_id))
+names(udmodel)[18]<-"score"
+udmodel$score <- gsub(".*_", "",udmodel$score)
+udmodel$score <- gsub("\\..*", "", udmodel$score)
+
+
+
+
+pos_train_data <- cbind(pos_train_data, replicate(1,pos_train_data$text))
+names(pos_train_data)[4]<-"textSentiment"
+#pos_train_data$index <- NULL
+
+pos_train_data <- tibble::rowid_to_column(pos_train_data, "index")
+pos_train_data$textSentiment <- as.character(pos_train_data$textSentiment)
+
+#get_sentiments(pos_train_data$textSentiment)
+
+#pos_train_data$textSentiment%>%
+  #inner_join(get_sentiments("bing")) %>%
+  #count(doc_id, index = index %/% 80, sentiment) %>%
+  #spread(textSentiment, n, fill = 0) %>%
+  #mutate(textSentiment = positive - negative)
+review_text <- udmodel
+ 
+bing_and_nrc <- bind_rows(review_text %>%
+                            inner_join(get_sentiments("bing")) %>%
+                            mutate(method = "Bing et al."),
+                          review_text %>%
+                            inner_join(get_sentiments("loughran") %>%
+                                         filter(sentiment %in% c("positive",
+                                                                 "negative"))) %>%
+                            mutate(method = "Loughran")) %>%
+  count(method, index = doc_id, sentiment) %>%
+  spread(sentiment, n, fill = 0) %>%
+  mutate(sentiment = positive - negative)
+ 
+bind_rows(
+          bing_and_nrc) %>%
+  ggplot(aes(index, sentiment, fill = method)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~method, ncol = 1, scales = "free_y")
+
+#pos_train_data$textSentiment <- analyzeSentiment(pos_train_data$textSentiment)
+```
+
+```{r, sentiments using four different lexicons}
+syuzhet <- get_sentiment(pos_train_data$text, method="syuzhet")
+bing <- get_sentiment(pos_train_data$text, method="bing")
+afinn <- get_sentiment(pos_train_data$text, method="afinn")
+nrc <- get_sentiment(pos_train_data$text, method="nrc")
+sentiments <- data.frame(syuzhet, bing, afinn, nrc, pos_train_data$score)
+```
+
+```{r, plot the results of sentiment in a graph}
+
+plot_ly(sentiments, x=~pos_train_data$doc_id, y=~syuzhet, type="scatter", mode="lines", name="syuzhet",line = list(color = 'rgb(255,165,0)',width=1)) %>%
+  layout(title="Sentiment Based on Syuzhet",
+         yaxis=list(title="Sentiment Score"), xaxis=list(title="Different Reviews"))
+
+plot_ly(sentiments, x=~pos_train_data$doc_id, y=~bing, type="scatter", mode="lines", name="bing",line = list(color = 'rgb(22, 96, 167)',width=1)) %>%
+  layout(title="Sentiment Based on Bing",
+         yaxis=list(title="Sentiment Score"), xaxis=list(title="Different Reviews"))
+
+plot_ly(sentiments, x=~pos_train_data$doc_id, y=~nrc, type="scatter", mode="lines", name="NRC",line = list(color = 'rgb(205, 12, 24)',width=1)) %>%
+  layout(title="Sentiment Based on NRC",
+         yaxis=list(title="Sentiment Score"), xaxis=list(title="Different Reviews"))
+
+plot_ly(sentiments, x=~pos_train_data$doc_id, y=~afinn, type="scatter", mode="lines", name="AFINN",line = list(color = 'rgb(204,204,50)',width=1)) %>%
+  layout(title="Sentiment Based on Afinn",
+         yaxis=list(title="Sentiment Score"), xaxis=list(title="Different Reviews"))
+
+```
+
+
+```{r, plot the imdb ratings}
+randFile <- data.frame(pos_train_data$score, pos_train_data$doc_id)
+firsthundScore <- randFile$pos_train_data$score[1:100]
+firsthundID <- randFile$pos_train_data$doc_id[1:100]
+
+testfile <- data.frame(firsthundScore, firsthundID)
+
+plot_ly(newpostraindata, x=~newpostraindata$doc_id, y=~newpostraindata$score, type="scatter", mode="lines", name="AFINN",line = list(color = 'rgb(204,204,50)',width=1)) %>%
+  layout(title="Sentiment Based on Afinn",
+        yaxis=list(title="Sentiment Score"), xaxis=list(title="Different Reviews"))
+
+
+
+
+
+
+newpostraindata <- pos_train_data %>%
+  slice(1:1000)
+```
+
+
+
+
+
+
+
+
+```{r, emotions using NRC}
+emotions <- get_nrc_sentiment(pos_train_data$text)
+emo_bar = colSums(emotions)
+emo_sum = data.frame(count=emo_bar, emotion=names(emo_bar))
+emo_sum$emotion = factor(emo_sum$emotion, levels=emo_sum$emotion[order(emo_sum$count, decreasing = TRUE)])
+```
+
+```{r,emotion results in a graph}
+plot_ly(emo_sum, x=~emotion, y=~count, type="bar", color=~emotion) %>%
+  layout(xaxis=list(title=""), showlegend=FALSE,
+         title="Distribution of emotion categories for HDB (1-10 June 2017)")
+```
+
+```{r, wordcloud}
+all = c(
+  paste(pos_train_data[emotions$anger > 0], collapse=" "),
+  paste(pos_train_data[emotions$anticipation > 0], collapse=" "),
+  paste(pos_train_data[emotions$disgust > 0], collapse=" "),
+  paste(pos_train_data[emotions$fear > 0], collapse=" "),
+  paste(pos_train_data[emotions$joy > 0], collapse=" "),
+  paste(pos_train_data[emotions$sadness > 0], collapse=" "),
+  paste(pos_train_data[emotions$surprise > 0], collapse=" "),
+  paste(pos_train_data[emotions$trust > 0], collapse=" ")
+)
+
+all <- removeWords(all, stopwords("english"))
+# create corpus
+corpus = Corpus(VectorSource(all))
+#
+# create term-document matrix
+tdm = TermDocumentMatrix(corpus)
+#
+# convert as matrix
+tdm = as.matrix(tdm)
+tdm1 <- tdm[nchar(rownames(tdm)) < 11,]
+#
+# add column names
+colnames(tdm) = c('anger', 'anticipation', 'disgust', 'fear', 'joy', 'sadness', 'surprise', 'trust')
+colnames(tdm1) <- colnames(tdm)
+comparison.cloud(tdm1, random.order=FALSE,
+                 colors = c("#00B2FF", "red", "#FF0099", "#6600CC", "green", "orange", "blue", "brown"),
+                 title.size=1, max.words=250, scale=c(2.5, 0.4),rot.per=0.4)
+
+```
+
+```{r}
+get_sentiments("afinn")
+```
+
+
+
